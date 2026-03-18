@@ -121,11 +121,15 @@ def simulate_bracket(games, stats, overrides={}):
         feed = feeders.get(pos, [])
         if len(feed) == 2:
             t1, t2 = get_winner(feed[0]), get_winner(feed[1])
-        elif len(teams) == 2:
-            t1 = NAME_MAP.get(teams[0]['nameShort'], teams[0]['nameShort']) if teams[0]['nameShort'] else None
-            t2 = NAME_MAP.get(teams[1]['nameShort'], teams[1]['nameShort']) if teams[1]['nameShort'] else None
         else:
-            return None
+            t1 = teams[0]['nameShort'] if teams and teams[0]['nameShort'] else None
+            t2 = teams[1]['nameShort'] if len(teams) > 1 and teams[1]['nameShort'] else None
+            # For games with a null slot, fill in with First Four predicted winner
+            first_four_feeds = [fp for fp in feeders.get(pos, [])]
+            if t1 is None and first_four_feeds:
+                t1 = get_winner(first_four_feeds[0])
+            if t2 is None and first_four_feeds:
+                t2 = get_winner(first_four_feeds[0])
         if t1 and t2:
             score = compare_teams(t1, t2, stats)
             score_cache[pos] = score
