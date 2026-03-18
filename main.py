@@ -201,15 +201,23 @@ def reset():
 HTML_CONTENT = """<!DOCTYPE html>
 <html>
 <head>
-    <title>NCAA Bracket Predictor</title>
+    <title>NCAA 2026 Bracket Predictor</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 20px; }
-        h2 { color: #003087; }
+        body { font-family: Arial, sans-serif; max-width: 960px; margin: 20px auto; padding: 0 20px; background: #f5f5f5; }
+        h1 { color: #003087; }
+        h2 { color: #003087; border-bottom: 2px solid #003087; padding-bottom: 5px; }
         .round { margin-bottom: 30px; }
-        .game { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
-        .game label { width: 300px; color: #333; }
-        select { padding: 4px 8px; }
-        button { background: #003087; color: white; border: none; padding: 8px 16px; cursor: pointer; border-radius: 4px; }
+        .game { background: white; border-radius: 8px; padding: 12px 16px; margin: 8px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .teams { display: flex; gap: 20px; align-items: center; margin-bottom: 6px; }
+        .team { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .team input[type=radio] { width: 18px; height: 18px; accent-color: #003087; cursor: pointer; }
+        .fav { color: #2e7d32; font-weight: bold; }
+        .dog { color: #c62828; }
+        .prob { font-size: 0.8em; color: #666; margin-left: 4px; }
+        .analysis { font-size: 0.82em; color: #555; font-style: italic; margin-top: 4px; }
+        .date { font-size: 0.78em; color: #999; margin-bottom: 4px; }
+        .vs { color: #999; font-size: 0.9em; }
+        button { background: #003087; color: white; border: none; padding: 8px 16px; cursor: pointer; border-radius: 4px; margin-bottom: 20px; }
         button:hover { background: #c8102e; }
     </style>
 </head>
@@ -224,12 +232,15 @@ const roundNames = {
     '1': 'First Four', '2': 'Round of 64', '3': 'Round of 32',
     '4': 'Sweet 16', '5': 'Elite 8', '6': 'Final Four', '7': 'Championship'
 };
+
 async function loadBracket() {
     const res = await fetch(API + '/bracket');
     bracketData = await res.json();
     renderBracket();
 }
+
 function getRound(pos) { return String(pos)[0]; }
+
 function renderBracket() {
     const rounds = {};
     for (const [pos, game] of Object.entries(bracketData)) {
@@ -243,14 +254,29 @@ function renderBracket() {
         for (const [pos, game] of rounds[r]) {
             const t1 = game.team1 || 'TBD';
             const t2 = game.team2 || 'TBD';
-            const winner = game.winner || '?';
+            const winner = game.winner || '';
+            const score = game.score || 0;
+            const t1prob = game.team1_prob || 50;
+            const t2prob = game.team2_prob || 50;
+            const analysis = game.analysis || '';
+            const t1class = score > 0 ? 'fav' : 'dog';
+            const t2class = score < 0 ? 'fav' : 'dog';
             html += `<div class="game">
-                <label>${game.date}: <b>${t1}</b> vs <b>${t2}</b></label>
-                <select onchange="setWinner(${pos}, this.value)">
-                    <option value="${winner}" selected>🏆 ${winner}</option>
-                    ${t1 !== 'TBD' && t1 !== winner ? `<option value="${t1}">${t1}</option>` : ''}
-                    ${t2 !== 'TBD' && t2 !== winner ? `<option value="${t2}">${t2}</option>` : ''}
-                </select>
+                <div class="date">${game.date}</div>
+                <div class="teams">
+                    <label class="team">
+                        <input type="radio" name="game_${pos}" value="${t1}" ${winner===t1?'checked':''} onchange="setWinner(${pos}, '${t1}')">
+                        <span class="${t1class}">${t1}</span>
+                        <span class="prob">${t1prob}%</span>
+                    </label>
+                    <span class="vs">vs</span>
+                    <label class="team">
+                        <input type="radio" name="game_${pos}" value="${t2}" ${winner===t2?'checked':''} onchange="setWinner(${pos}, '${t2}')">
+                        <span class="${t2class}">${t2}</span>
+                        <span class="prob">${t2prob}%</span>
+                    </label>
+                </div>
+                ${analysis ? `<div class="analysis">📊 ${analysis}</div>` : ''}
             </div>`;
         }
         html += '</div>';
@@ -266,14 +292,17 @@ async function setWinner(pos, winner) {
     });
     loadBracket();
 }
+
 async function resetBracket() {
     await fetch(API + '/reset');
     loadBracket();
 }
+
 loadBracket();
 </script>
 </body>
 </html>"""
+
 
 
 @app.get("/", response_class=HTMLResponse)
