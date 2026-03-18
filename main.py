@@ -191,16 +191,15 @@ function renderBracket() {
     for (const r of Object.keys(rounds).sort()) {
         html += `<div class="round"><h2>${roundNames[r] || 'Round ' + r}</h2>`;
         for (const [pos, game] of rounds[r]) {
-            const t1 = game.team1 || '?';
-            const t2 = game.team2 || '?';
+            const t1 = game.team1 || 'TBD';
+            const t2 = game.team2 || 'TBD';
             const winner = game.winner || '?';
-            if (t1 === '?' && t2 === '?') continue;
             html += `<div class="game">
                 <label>${game.date}: <b>${t1}</b> vs <b>${t2}</b></label>
                 <select onchange="setWinner(${pos}, this.value)">
                     <option value="${winner}" selected>🏆 ${winner}</option>
-                    ${t1 !== '?' && t1 !== winner ? `<option value="${t1}">${t1}</option>` : ''}
-                    ${t2 !== '?' && t2 !== winner ? `<option value="${t2}">${t2}</option>` : ''}
+                    ${t1 !== 'TBD' && t1 !== winner ? `<option value="${t1}">${t1}</option>` : ''}
+                    ${t2 !== 'TBD' && t2 !== winner ? `<option value="${t2}">${t2}</option>` : ''}
                 </select>
             </div>`;
         }
@@ -208,6 +207,7 @@ function renderBracket() {
     }
     document.getElementById('bracket').innerHTML = html;
 }
+
 async function setWinner(pos, winner) {
     await fetch(API + '/override', {
         method: 'POST',
