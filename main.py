@@ -148,6 +148,83 @@ def reset():
     bracket_overrides.clear()
     return {"status": "reset"}
 
+HTML_CONTENT = """<!DOCTYPE html>
+<html>
+<head>
+    <title>NCAA Bracket Predictor</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 20px; }
+        h2 { color: #003087; }
+        .round { margin-bottom: 30px; }
+        .game { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+        .game label { width: 300px; color: #333; }
+        select { padding: 4px 8px; }
+        button { background: #003087; color: white; border: none; padding: 8px 16px; cursor: pointer; border-radius: 4px; }
+        button:hover { background: #c8102e; }
+    </style>
+</head>
+<body>
+    <h1>🏀 NCAA 2026 Bracket Predictor</h1>
+    <button onclick="resetBracket()">Reset to Model Predictions</button>
+    <div id="bracket"></div>
+<script>
+const API = '';
+let bracketData = {};
+const roundNames = {
+    '1': 'First Four', '2': 'Round of 64', '3': 'Round of 32',
+    '4': 'Sweet 16', '5': 'Elite 8', '6': 'Final Four', '7': 'Championship'
+};
+async function loadBracket() {
+    const res = await fetch(API + '/bracket');
+    bracketData = await res.json();
+    renderBracket();
+}
+function getRound(pos) { return String(pos)[0]; }
+function renderBracket() {
+    const rounds = {};
+    for (const [pos, game] of Object.entries(bracketData)) {
+        const r = getRound(pos);
+        if (!rounds[r]) rounds[r] = [];
+        rounds[r].push([pos, game]);
+    }
+    let html = '';
+    for (const r of Object.keys(rounds).sort()) {
+        html += `<div class="round"><h2>${roundNames[r] || 'Round ' + r}</h2>`;
+        for (const [pos, game] of rounds[r]) {
+            const t1 = game.team1 || '?';
+            const t2 = game.team2 || '?';
+            const winner = game.winner || '?';
+            if (t1 === '?' && t2 === '?') continue;
+            html += `<div class="game">
+                <label>${game.date}: <b>${t1}</b> vs <b>${t2}</b></label>
+                <select onchange="setWinner(${pos}, this.value)">
+                    <option value="${winner}" selected>🏆 ${winner}</option>
+                    ${t1 !== '?' && t1 !== winner ? `<option value="${t1}">${t1}</option>` : ''}
+                    ${t2 !== '?' && t2 !== winner ? `<option value="${t2}">${t2}</option>` : ''}
+                </select>
+            </div>`;
+        }
+        html += '</div>';
+    }
+    document.getElementById('bracket').innerHTML = html;
+}
+async function setWinner(pos, winner) {
+    await fetch(API + '/override', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({position_id: parseInt(pos), winner: winner})
+    });
+    loadBracket();
+}
+async function resetBracket() {
+    await fetch(API + '/reset');
+    loadBracket();
+}
+loadBracket();
+</script>
+</body>
+</html>"""
+
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return open('bracket.html').read()
+    return HTML_CONTENT
