@@ -84,9 +84,13 @@ def build_feeders(games):
 def simulate_bracket(games, team_stats, overrides={}):
     feeders = build_feeders(games)
     pos_to_game = {g['bracketPositionId']: g for g in games}
+    winner_cache = {}
 
     def get_winner(pos):
+        if pos in winner_cache:
+            return winner_cache[pos]
         if pos in overrides:
+            winner_cache[pos] = overrides[pos]
             return overrides[pos]
         g = pos_to_game.get(pos)
         if not g:
@@ -98,23 +102,31 @@ def simulate_bracket(games, team_stats, overrides={}):
             t2 = get_winner(feed[1])
         elif len(teams) == 2:
             t1 = name_map.get(teams[0]['nameShort'], teams[0]['nameShort']) if teams[0]['nameShort'] else None
-            t2 = name_map.get(teams[1]['nameShort'], teams[1]['nameShort']) if teams[1]['nameShort'] else None
+            t2 = name_map.get(teams[1]['nameShort'], teams[1]['nameShort']) if len(teams) > 1 and teams[1]['nameShort'] else None
         else:
             return None
         if t1 and t2:
             score = compare_teams(t1, t2, team_stats)
-            return t1 if score > 0 else t2
-        return t1 or t2
+            w = t1 if score > 0 else t2
+        else:
+            w = t1 or t2
+        winner_cache[pos] = w
+        return w
 
     result = {}
     for g in games:
         pos = g['bracketPositionId']
+        feed = feeders.get(pos, [])
         teams = g['teams']
-        t1 = name_map.get(teams[0]['nameShort'], teams[0]['nameShort']) if teams and teams[0]['nameShort'] else None
-        t2 = name_map.get(teams[1]['nameShort'], teams[1]['nameShort']) if len(teams) > 1 and teams[1]['nameShort'] else None
+        if len(feed) == 2:
+            t1 = get_winner(feed[0])
+            t2 = get_winner(feed[1])
+        else:
+            t1 = teams[0]['nameShort'] if teams and teams[0]['nameShort'] else None
+            t2 = teams[1]['nameShort'] if len(teams) > 1 and teams[1]['nameShort'] else None
         result[pos] = {
-            'team1': teams[0]['nameShort'] if teams else None,
-            'team2': teams[1]['nameShort'] if len(teams) > 1 else None,
+            'team1': t1,
+            'team2': t2,
             'winner': get_winner(pos),
             'date': g['startDate']
         }
