@@ -12,6 +12,7 @@ import time
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+
 # ── Data fetching ──────────────────────────────────────────────────────────────
 
 def fetch_all_pages(cat_id, stat_type='individual'):
@@ -22,6 +23,7 @@ def fetch_all_pages(cat_id, stat_type='individual'):
         rows += requests.get(url, params={'page': p}).json()['data']
         time.sleep(0.25)
     return rows, r['title']
+
 
 def load_team_stats():
     team_categories = {
@@ -45,9 +47,11 @@ def load_team_stats():
         combined = pd.merge(combined, df, on='Team', how='outer')
     return combined
 
+
 def load_bracket():
     r = requests.get("https://ncaa-api.henrygd.me/brackets/basketball-men/d1/2026")
     return r.json()['championships'][0]['games']
+
 
 name_map = {
     'Prairie View A&M': 'Prairie View', 'Northern Iowa': 'UNI',
@@ -57,22 +61,24 @@ name_map = {
     "Saint Mary's": "Saint Mary's (CA)"
 }
 
+
 def compare_teams(t1_name, t2_name, team_stats):
     try:
         t1 = team_stats[team_stats['Team'] == t1_name].iloc[0]
         t2 = team_stats[team_stats['Team'] == t2_name].iloc[0]
         score = (
-            (float(t1['SCR MAR']) - float(t2['SCR MAR'])) * 1.0 +
-            (float(t2['OPP PPG']) - float(t1['OPP PPG'])) * 2.0 +
-            (float(t1['FG%'])     - float(t2['FG%']))      * 1.0 +
-            (float(t2['TOPG'])    - float(t1['TOPG']))      * 1.5 +
-            (float(t1['3PG'])     - float(t2['3PG']))       * 1.0 +
-            (float(t1['FT%'])     - float(t2['FT%']))       * 0.5 +
-            (float(t1['REB MAR']) - float(t2['REB MAR']))   * 1.0
+                (float(t1['SCR MAR']) - float(t2['SCR MAR'])) * 1.0 +
+                (float(t2['OPP PPG']) - float(t1['OPP PPG'])) * 2.0 +
+                (float(t1['FG%']) - float(t2['FG%'])) * 1.0 +
+                (float(t2['TOPG']) - float(t1['TOPG'])) * 1.5 +
+                (float(t1['3PG']) - float(t2['3PG'])) * 1.0 +
+                (float(t1['FT%']) - float(t2['FT%'])) * 0.5 +
+                (float(t1['REB MAR']) - float(t2['REB MAR'])) * 1.0
         )
         return score
     except:
         return 0
+
 
 def build_feeders(games):
     feeders = defaultdict(list)
@@ -81,16 +87,19 @@ def build_feeders(games):
             feeders[g['victorBracketPositionId']].append(g['bracketPositionId'])
     return feeders
 
+
 def simulate_bracket(games, team_stats, overrides={}):
     feeders = build_feeders(games)
     pos_to_game = {g['bracketPositionId']: g for g in games}
     winner_cache = {}
+    score_cache = {}
 
     def get_winner(pos):
         if pos in winner_cache:
             return winner_cache[pos]
         if pos in overrides:
             winner_cache[pos] = overrides[pos]
+            score_cache[pos] = None
             return overrides[pos]
         g = pos_to_game.get(pos)
         if not g:
@@ -107,11 +116,25 @@ def simulate_bracket(games, team_stats, overrides={}):
             return None
         if t1 and t2:
             score = compare_teams(t1, t2, team_stats)
+            score_cache[pos] = score
             w = t1 if score > 0 else t2
         else:
             w = t1 or t2
+            score_cache[pos] = 0
         winner_cache[pos] = w
         return w
+
+    def get_analysis(t1, t2, score):
+        if not t1 or not t2 or score is None:
+            return ""
+        fav = t1 if score > 0 else t2
+        dog = t2 if score > 0 else t1
+        margin = abs(score)
+        if margin > 30: conf = "dominant favourite"
+        elif margin > 15: conf = "strong favourite"
+        elif margin > 5: conf = "moderate favourite"
+        else: conf = "slight favourite"
+        return f"{fav} is a {conf} over {dog} (score: {score:+.1f})"
 
     result = {}
     for g in games:
@@ -124,13 +147,23 @@ def simulate_bracket(games, team_stats, overrides={}):
         else:
             t1 = teams[0]['nameShort'] if teams and teams[0]['nameShort'] else None
             t2 = teams[1]['nameShort'] if len(teams) > 1 and teams[1]['nameShort'] else None
+        get_winner(pos)
+        score = score_cache.get(pos, 0) or 0
+        total = abs(score) + 10
+        prob = round((abs(score) + 10) / (2 * total) * 100 + (50 if score >= 0 else -50) * abs(score) / total)
+        t1_prob = round(50 + (score / (abs(score) + 10)) * 50) if t1 and t2 else 50
         result[pos] = {
-            'team1': t1,
-            'team2': t2,
-            'winner': get_winner(pos),
-            'date': g['startDate']
+            'team1': t1, 'team2': t2,
+            'winner': winner_cache.get(pos),
+            'date': g['startDate'],
+            'score': round(score, 1),
+            'team1_prob': t1_prob,
+            'team2_prob': 100 - t1_prob,
+            'analysis': get_analysis(t1, t2, score)
         }
     return result
+
+
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
@@ -140,25 +173,30 @@ print("Loading bracket...")
 games = load_bracket()
 bracket_overrides = {}
 
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.get("/bracket")
 def get_bracket():
     return simulate_bracket(games, team_stats, bracket_overrides)
 
+
 class Override(BaseModel):
     position_id: int
     winner: str
+
 
 @app.post("/override")
 def set_override(override: Override):
     bracket_overrides[override.position_id] = override.winner
     return {"status": "ok"}
 
+
 @app.get("/reset")
 def reset():
     bracket_overrides.clear()
     return {"status": "reset"}
+
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html>
@@ -236,6 +274,7 @@ loadBracket();
 </script>
 </body>
 </html>"""
+
 
 @app.get("/", response_class=HTMLResponse)
 def index():
