@@ -217,6 +217,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         .analysis { font-size: 0.82em; color: #555; font-style: italic; margin-top: 4px; }
         .date { font-size: 0.78em; color: #999; margin-bottom: 4px; }
         .vs { color: #999; font-size: 0.9em; }
+        .tossup { display: inline-block; background: #ff6f00; color: white; font-size: 0.75em; padding: 2px 7px; border-radius: 10px; margin-left: 8px; }
         button { background: #003087; color: white; border: none; padding: 8px 16px; cursor: pointer; border-radius: 4px; margin-bottom: 20px; }
         button:hover { background: #c8102e; }
     </style>
@@ -232,6 +233,8 @@ const roundNames = {
     '1': 'First Four', '2': 'Round of 64', '3': 'Round of 32',
     '4': 'Sweet 16', '5': 'Elite 8', '6': 'Final Four', '7': 'Championship'
 };
+const tossup = Math.abs(score) < 5 ? '<span class="tossup">🔥 Toss-up</span>' : '';
+
 
 async function loadBracket() {
     const res = await fetch(API + '/bracket');
@@ -262,7 +265,7 @@ function renderBracket() {
             const t1class = score > 0 ? 'fav' : 'dog';
             const t2class = score < 0 ? 'fav' : 'dog';
             html += `<div class="game">
-                <div class="date">${game.date}</div>
+                <div class="date">${game.date} ${tossup}</div>
                 <div class="teams">
                     <label class="team">
                         <input type="radio" name="game_${pos}" value="${t1}" ${winner===t1?'checked':''} onchange="setWinner(${pos}, '${t1}')">
