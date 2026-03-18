@@ -5,6 +5,7 @@ import pandas as pd
 from collections import defaultdict
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -121,15 +122,11 @@ def simulate_bracket(games, stats, overrides={}):
         feed = feeders.get(pos, [])
         if len(feed) == 2:
             t1, t2 = get_winner(feed[0]), get_winner(feed[1])
+        elif len(teams) == 2:
+            t1 = NAME_MAP.get(teams[0]['nameShort'], teams[0]['nameShort']) if teams[0]['nameShort'] else None
+            t2 = NAME_MAP.get(teams[1]['nameShort'], teams[1]['nameShort']) if teams[1]['nameShort'] else None
         else:
-            t1 = teams[0]['nameShort'] if teams and teams[0]['nameShort'] else None
-            t2 = teams[1]['nameShort'] if len(teams) > 1 and teams[1]['nameShort'] else None
-            # For games with a null slot, fill in with First Four predicted winner
-            first_four_feeds = [fp for fp in feeders.get(pos, [])]
-            if t1 is None and first_four_feeds:
-                t1 = get_winner(first_four_feeds[0])
-            if t2 is None and first_four_feeds:
-                t2 = get_winner(first_four_feeds[0])
+            return None
         if t1 and t2:
             score = compare_teams(t1, t2, stats)
             score_cache[pos] = score
@@ -145,11 +142,23 @@ def simulate_bracket(games, stats, overrides={}):
         pos = g['bracketPositionId']
         feed = feeders.get(pos, [])
         teams = g['teams']
+
+        # Resolve team names — use feeder winners for later rounds
+        # and First Four winners for null slots in Round of 64
         if len(feed) == 2:
             t1, t2 = get_winner(feed[0]), get_winner(feed[1])
         else:
             t1 = teams[0]['nameShort'] if teams and teams[0]['nameShort'] else None
             t2 = teams[1]['nameShort'] if len(teams) > 1 and teams[1]['nameShort'] else None
+            # Fill null slots with First Four predicted winner
+            ff_feeds = feeders.get(pos, [])
+            if ff_feeds:
+                ff_winner = get_winner(ff_feeds[0])
+                if t1 is None:
+                    t1 = ff_winner
+                elif t2 is None:
+                    t2 = ff_winner
+
         get_winner(pos)
         score = score_cache.get(pos, 0) or 0
         t1_prob = round(50 + (score / (abs(score) + 10)) * 50) if t1 and t2 else 50
@@ -163,115 +172,6 @@ def simulate_bracket(games, stats, overrides={}):
             'analysis': get_analysis(t1, t2, score)
         }
     return result
-
-# ── Frontend ───────────────────────────────────────────────────────────────────
-
-HTML_CONTENT = """<!DOCTYPE html>
-<html>
-<head>
-    <title>NCAA 2026 Bracket Predictor</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 960px; margin: 20px auto; padding: 0 20px; background: #f5f5f5; }
-        h1 { color: #003087; }
-        h2 { color: #003087; border-bottom: 2px solid #003087; padding-bottom: 5px; }
-        .round { margin-bottom: 30px; }
-        .game { background: white; border-radius: 8px; padding: 12px 16px; margin: 8px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .teams { display: flex; gap: 20px; align-items: center; margin-bottom: 6px; }
-        .team { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-        .team input[type=radio] { width: 18px; height: 18px; accent-color: #003087; cursor: pointer; }
-        .fav { color: #2e7d32; font-weight: bold; }
-        .dog { color: #c62828; }
-        .prob { font-size: 0.8em; color: #666; margin-left: 4px; }
-        .analysis { font-size: 0.82em; color: #555; font-style: italic; margin-top: 4px; }
-        .date { font-size: 0.78em; color: #999; margin-bottom: 4px; }
-        .vs { color: #999; font-size: 0.9em; }
-        .tossup { display: inline-block; background: #ff6f00; color: white; font-size: 0.75em; padding: 2px 7px; border-radius: 10px; margin-left: 8px; }
-        button { background: #003087; color: white; border: none; padding: 8px 16px; cursor: pointer; border-radius: 4px; margin-bottom: 20px; }
-        button:hover { background: #c8102e; }
-    </style>
-</head>
-<body>
-    <h1>🏀 NCAA 2026 Bracket Predictor</h1>
-    <button onclick="resetBracket()">Reset to Model Predictions</button>
-    <div id="bracket"></div>
-<script>
-const API = '';
-let bracketData = {};
-const roundNames = {
-    '1': 'First Four', '2': 'Round of 64', '3': 'Round of 32',
-    '4': 'Sweet 16', '5': 'Elite 8', '6': 'Final Four', '7': 'Championship'
-};
-
-async function loadBracket() {
-    const res = await fetch(API + '/bracket');
-    bracketData = await res.json();
-    renderBracket();
-}
-
-function getRound(pos) { return String(pos)[0]; }
-
-function renderBracket() {
-    const rounds = {};
-    for (const [pos, game] of Object.entries(bracketData)) {
-        const r = getRound(pos);
-        if (!rounds[r]) rounds[r] = [];
-        rounds[r].push([pos, game]);
-    }
-    let html = '';
-    for (const r of Object.keys(rounds).sort()) {
-        html += `<div class="round"><h2>${roundNames[r] || 'Round ' + r}</h2>`;
-        for (const [pos, game] of rounds[r]) {
-            const t1 = game.team1 || 'TBD';
-            const t2 = game.team2 || 'TBD';
-            const winner = game.winner || '';
-            const score = game.score || 0;
-            const t1prob = game.team1_prob || 50;
-            const t2prob = game.team2_prob || 50;
-            const analysis = game.analysis || '';
-            const t1class = score > 0 ? 'fav' : 'dog';
-            const t2class = score < 0 ? 'fav' : 'dog';
-            const tossup = Math.abs(score) < 5 ? '<span class="tossup">🔥 Toss-up</span>' : '';
-            html += `<div class="game">
-                <div class="date">${game.date}${tossup}</div>
-                <div class="teams">
-                    <label class="team">
-                        <input type="radio" name="game_${pos}" value="${t1}" ${winner===t1?'checked':''} onchange="setWinner(${pos}, '${t1}')">
-                        <span class="${t1class}">${t1}</span>
-                        <span class="prob">${t1prob}%</span>
-                    </label>
-                    <span class="vs">vs</span>
-                    <label class="team">
-                        <input type="radio" name="game_${pos}" value="${t2}" ${winner===t2?'checked':''} onchange="setWinner(${pos}, '${t2}')">
-                        <span class="${t2class}">${t2}</span>
-                        <span class="prob">${t2prob}%</span>
-                    </label>
-                </div>
-                ${analysis ? `<div class="analysis">📊 ${analysis}</div>` : ''}
-            </div>`;
-        }
-        html += '</div>';
-    }
-    document.getElementById('bracket').innerHTML = html;
-}
-
-async function setWinner(pos, winner) {
-    await fetch(API + '/override', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({position_id: parseInt(pos), winner: winner})
-    });
-    loadBracket();
-}
-
-async function resetBracket() {
-    await fetch(API + '/reset');
-    loadBracket();
-}
-
-loadBracket();
-</script>
-</body>
-</html>"""
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
@@ -303,4 +203,4 @@ def reset():
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return HTML_CONTENT
+    return open('bracket.html').read()
