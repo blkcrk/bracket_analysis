@@ -5,7 +5,6 @@ import pandas as pd
 from collections import defaultdict
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -38,6 +37,18 @@ WEIGHTS = {
     'TOPG': 1.5, '3PG': 1.0, 'FT%': 0.5, 'REB MAR': 1.0
 }
 
+# ── Injury adjustments ─────────────────────────────────────────────────────────
+# Negative SCR MAR = scoring loss, positive OPP PPG = weaker defense without player
+
+INJURY_ADJUSTMENTS = {
+    'Gonzaga': {'SCR MAR': -17.8, 'OPP PPG': 2.0},
+    'BYU': {'SCR MAR': -18.0, 'OPP PPG': 2.0},
+    'Alabama': {'SCR MAR': -16.8, 'OPP PPG': 1.5},
+    'North Carolina': {'SCR MAR': -19.8, 'OPP PPG': 2.5},
+    'Texas Tech': {'SCR MAR': -21.8, 'OPP PPG': 2.5},
+}
+
+
 # ── Data loading ───────────────────────────────────────────────────────────────
 
 def fetch_pages(cat_id, stat_type):
@@ -48,6 +59,7 @@ def fetch_pages(cat_id, stat_type):
         rows += requests.get(url, params={'page': p}).json()['data']
         time.sleep(0.25)
     return rows
+
 
 def load_team_stats():
     dfs = []
@@ -62,39 +74,61 @@ def load_team_stats():
         combined = pd.merge(combined, df, on='Team', how='outer')
     return combined
 
+
 def load_bracket():
     r = requests.get("https://ncaa-api.henrygd.me/brackets/basketball-men/d1/2026")
     return r.json()['championships'][0]['games']
 
+
 # ── Prediction logic ───────────────────────────────────────────────────────────
+
+def get_adjusted_stats(name, row):
+    adj = INJURY_ADJUSTMENTS.get(name, {})
+    return {
+        'SCR MAR': float(row['SCR MAR']) + adj.get('SCR MAR', 0),
+        'OPP PPG': float(row['OPP PPG']) + adj.get('OPP PPG', 0),
+        'FG%': float(row['FG%']),
+        'TOPG': float(row['TOPG']),
+        '3PG': float(row['3PG']),
+        'FT%': float(row['FT%']),
+        'REB MAR': float(row['REB MAR']),
+    }
+
 
 def compare_teams(t1_name, t2_name, stats):
     try:
-        t1 = stats[stats['Team'] == t1_name].iloc[0]
-        t2 = stats[stats['Team'] == t2_name].iloc[0]
+        t1 = get_adjusted_stats(t1_name, stats[stats['Team'] == t1_name].iloc[0])
+        t2 = get_adjusted_stats(t2_name, stats[stats['Team'] == t2_name].iloc[0])
         return (
-            (float(t1['SCR MAR']) - float(t2['SCR MAR'])) * WEIGHTS['SCR MAR'] +
-            (float(t2['OPP PPG']) - float(t1['OPP PPG'])) * WEIGHTS['OPP PPG'] +
-            (float(t1['FG%'])     - float(t2['FG%']))      * WEIGHTS['FG%'] +
-            (float(t2['TOPG'])    - float(t1['TOPG']))      * WEIGHTS['TOPG'] +
-            (float(t1['3PG'])     - float(t2['3PG']))       * WEIGHTS['3PG'] +
-            (float(t1['FT%'])     - float(t2['FT%']))       * WEIGHTS['FT%'] +
-            (float(t1['REB MAR']) - float(t2['REB MAR']))   * WEIGHTS['REB MAR']
+                (t1['SCR MAR'] - t2['SCR MAR']) * WEIGHTS['SCR MAR'] +
+                (t2['OPP PPG'] - t1['OPP PPG']) * WEIGHTS['OPP PPG'] +
+                (t1['FG%'] - t2['FG%']) * WEIGHTS['FG%'] +
+                (t2['TOPG'] - t1['TOPG']) * WEIGHTS['TOPG'] +
+                (t1['3PG'] - t2['3PG']) * WEIGHTS['3PG'] +
+                (t1['FT%'] - t2['FT%']) * WEIGHTS['FT%'] +
+                (t1['REB MAR'] - t2['REB MAR']) * WEIGHTS['REB MAR']
         )
     except:
         return 0
+
 
 def get_analysis(t1, t2, score):
     if not t1 or not t2 or score is None:
         return ""
     fav = t1 if score > 0 else t2
     dog = t2 if score > 0 else t1
+    inj_note = ""
+    if fav in INJURY_ADJUSTMENTS:
+        inj_note = f" ⚠️ {fav} has injury concerns."
+    elif dog in INJURY_ADJUSTMENTS:
+        inj_note = f" ⚠️ {dog} has injury concerns."
     margin = abs(score)
     conf = ("dominant favourite" if margin > 30 else
-            "strong favourite"   if margin > 15 else
-            "moderate favourite" if margin > 5  else
+            "strong favourite" if margin > 15 else
+            "moderate favourite" if margin > 5 else
             "slight favourite")
-    return f"{fav} is a {conf} over {dog} (score: {score:+.1f})"
+    return f"{fav} is a {conf} over {dog} (score: {score:+.1f}).{inj_note}"
+
 
 def build_feeders(games):
     feeders = defaultdict(list)
@@ -102,6 +136,7 @@ def build_feeders(games):
         if g['victorBracketPositionId']:
             feeders[g['victorBracketPositionId']].append(g['bracketPositionId'])
     return feeders
+
 
 def simulate_bracket(games, stats, overrides={}):
     feeders = build_feeders(games)
@@ -142,15 +177,11 @@ def simulate_bracket(games, stats, overrides={}):
         pos = g['bracketPositionId']
         feed = feeders.get(pos, [])
         teams = g['teams']
-
-        # Resolve team names — use feeder winners for later rounds
-        # and First Four winners for null slots in Round of 64
         if len(feed) == 2:
             t1, t2 = get_winner(feed[0]), get_winner(feed[1])
         else:
             t1 = teams[0]['nameShort'] if teams and teams[0]['nameShort'] else None
             t2 = teams[1]['nameShort'] if len(teams) > 1 and teams[1]['nameShort'] else None
-            # Fill null slots with First Four predicted winner
             ff_feeds = feeders.get(pos, [])
             if ff_feeds:
                 ff_winner = get_winner(ff_feeds[0])
@@ -158,7 +189,6 @@ def simulate_bracket(games, stats, overrides={}):
                     t1 = ff_winner
                 elif t2 is None:
                     t2 = ff_winner
-
         get_winner(pos)
         score = score_cache.get(pos, 0) or 0
         t1_prob = round(50 + (score / (abs(score) + 10)) * 50) if t1 and t2 else 50
@@ -173,6 +203,7 @@ def simulate_bracket(games, stats, overrides={}):
         }
     return result
 
+
 # ── Startup ────────────────────────────────────────────────────────────────────
 
 print("Loading team stats...")
@@ -181,25 +212,30 @@ print("Loading bracket...")
 games = load_bracket()
 bracket_overrides = {}
 
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.get("/bracket")
 def get_bracket():
     return simulate_bracket(games, team_stats, bracket_overrides)
 
+
 class Override(BaseModel):
     position_id: int
     winner: str
+
 
 @app.post("/override")
 def set_override(override: Override):
     bracket_overrides[override.position_id] = override.winner
     return {"status": "ok"}
 
+
 @app.get("/reset")
 def reset():
     bracket_overrides.clear()
     return {"status": "reset"}
+
 
 @app.get("/", response_class=HTMLResponse)
 def index():
